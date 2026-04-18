@@ -133,6 +133,31 @@ jobs:
           run: |
               fab exists $WORKSPACE_NAME.Workspace/elt-framework.Folder/$FABRIC_SQL_DB_NAME.SQLDatabase | grep -q true || fab create $WORKSPACE_NAME.Workspace/elt-framework.Folder/$FABRIC_SQL_DB_NAME.SQLDatabase
 
+       # Setup .NET SDK for building sqlproj
+        - name: Setup .NET
+          uses: actions/setup-dotnet@v4
+          with:
+            dotnet-version: '8.0.x'
+
+       # Build the SQL project to produce a dacpac
+        - name: Build controlDB SQL project
+          run: dotnet build "${GITHUB_WORKSPACE}/workspace/elt-framework/controlDB.SQLDatabase/controlDB.sqlproj" --configuration Release
+
+       # Deploy dacpac to Fabric SQL Database using SqlPackage
+        - name: Deploy controlDB schema
+          run: |
+            server=$(fab get $WORKSPACE_NAME.Workspace/$FABRIC_SQL_DB_NAME.SQLDatabase -q properties.serverFqdn -f | tr -d '\r')
+            database=$(fab get $WORKSPACE_NAME.Workspace/$FABRIC_SQL_DB_NAME.SQLDatabase -q properties.databaseName -f | tr -d '\r')
+            access_token=$(curl -s -X POST "https://login.microsoftonline.com/${{ secrets.TENANT_ID }}/oauth2/v2.0/token" \
+              -d "client_id=${{ secrets.ACTION_SPN_CLIENTID }}&client_secret=${{ secrets.ACTION_SPN_SECRET }}&grant_type=client_credentials&scope=https://database.windows.net/.default" \
+              | jq -r '.access_token')
+            dotnet tool install -g microsoft.sqlpackage
+            sqlpackage /Action:Publish \
+              /SourceFile:"${GITHUB_WORKSPACE}/workspace/elt-framework/controlDB.SQLDatabase/bin/Release/controlDB.dacpac" \
+              /TargetServerName:"$server" \
+              /TargetDatabaseName:"$database" \
+              /AccessToken:"$access_token"
+
        # Create Fabric SQL database connection if it does not exist
         - name: Create FSQL DB Connection if it does not exist
           run: |
